@@ -135,7 +135,6 @@ class Manual(DataBluntTable):
 class Computed(DataBluntTable):
     __abstract__ = True
 
-
 ## TESTING
 
 class Video(Manual):
