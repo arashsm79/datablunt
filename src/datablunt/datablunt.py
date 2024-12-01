@@ -19,6 +19,7 @@ from types import NoneType
 
 
 T = TypeVar('T')
+mapper_registry = registry()
 
 class Primary(Generic[T]):
     pass
@@ -62,23 +63,15 @@ def convert_python_type(python_type: Any) -> Any:
 
 class DataBluntMetaClass(DeclarativeMeta):
 
-    # Replicate SQLAlchemy
-    def __setattr__(cls, name: str, value: Any) -> None:
-        DeclarativeMeta.__setattr__(cls, name, value)
-
-    def __delattr__(cls, name: str) -> None:
-        DeclarativeMeta.__delattr__(cls, name)
-
     def __new__(cls, name, bases, dct, parents=None, **kwargs: Any):
-
         # Set __table__ name for the database if __abstract__ is not set or False
         if not dct.get("__abstract__", False):
             dct["__tablename__"] =  name.lower()
 
+        # Store all composite primary key columns
+        composite_pk_columns = []
         # If parents are specified, process them
         if parents:
-            # Store all composite primary key columns
-            composite_pk_columns = []
             for parent in parents:
                 parent_pk_columns = inspect(parent).primary_key
                 for pk in parent_pk_columns:
@@ -91,15 +84,9 @@ class DataBluntMetaClass(DeclarativeMeta):
                     dct[pk.name] = fk_column
                     composite_pk_columns.append(pk.name)
 
-                # Add relationships to the child class
-                relationship_name = parent.__name__.lower()
-                dct[relationship_name] = relationship(parent)
-
-            # Define composite primary key constraint
-            if composite_pk_columns:
-                dct["__table_args__"] = (
-                    PrimaryKeyConstraint(*composite_pk_columns),
-                )
+                # TODO: Add relationships to the child class
+                # relationship_name = parent.__name__.lower()
+                # dct[relationship_name] = relationship(parent)
 
         # Go through attribute annotations of the class and add
         # corresponding database mapped columns to the class
@@ -107,8 +94,8 @@ class DataBluntMetaClass(DeclarativeMeta):
             column_kwargs = {}
             attr_type_args = list(get_args(attr_type))
             if get_origin(attr_type) is Primary:
-                column_kwargs["primary_key"] = True
                 attr_type = attr_type_args[0]
+                composite_pk_columns.append(attr_name)
             if NoneType in attr_type_args:
                 column_kwargs["nullable"] = True
                 attr_type_args.remove(NoneType)
@@ -117,19 +104,24 @@ class DataBluntMetaClass(DeclarativeMeta):
             column = mapped_column(attr_name, convert_python_type(attr_type), **column_kwargs)
             dct[attr_name] = column
 
+        # Define composite primary key constraint
+        if composite_pk_columns:
+            dct["__table_args__"] = (
+                PrimaryKeyConstraint(*composite_pk_columns),
+            )
+
         # Remove all the type annotations from the class attributes
         dct.pop("__annotations__", None)
         # Call SQLAlchemy's __new__ method to create the actual non-meta class
-        if 'Video' in name:
-            pass
-
         new_cls = super().__new__(cls, name, bases, dct)
 
         return new_cls
 
-
-class DataBluntTable(DeclarativeBase, metaclass=DataBluntMetaClass):
+class DataBluntTable(metaclass=DataBluntMetaClass):
     __abstract__ = True
+    registry = mapper_registry
+    metadata = mapper_registry.metadata
+    __init__ = mapper_registry.constructor
 
 class Manual(DataBluntTable):
     __abstract__ = True
@@ -145,7 +137,7 @@ class Video(Manual):
 
 class Recording(Manual):
     recording_id: Primary[int]
-    date: Primary[str]
+    recording_date: Primary[str]
     duration: float
 
 class Subject(Manual):
@@ -154,7 +146,7 @@ class Subject(Manual):
 
 class Session(Manual, parents = [Recording, Subject]):
     session_id: Primary[int]
-    date: str
+    session_date: str
 
 class Pose(Computed, parents = [Session]):
     frame: int
@@ -169,11 +161,35 @@ if __name__ == "__main__":
     with sqlalchemy.orm.Session(engine) as session:
         # Create a new video instance
         new_video = Video(video_id=1, name="Sample Video", path="/path/to/video")
-
-        # Add the new video to the session and commit
         session.add(new_video)
+
+        # Create a new recording instance
+        new_recording = Recording(recording_id=1, recording_date="2023-10-01", duration=120.0)
+        session.add(new_recording)
+
+        # Create a new subject instance
+        new_subject = Subject(subject_id=1, name="John Doe")
+        session.add(new_subject)
+
+        # Create a new session instance
+        new_session = Session(session_id=1, session_date="2023-10-02", recording_id=1, recording_date="2023-10-01", subject_id=1)
+        session.add(new_session)
+
+        # Commit all the new instances
         session.commit()
 
         # Query the video to verify it was added
         added_video = session.query(Video).filter_by(video_id=1).first()
         print(f"Added video: {added_video.name}, {added_video.path}")
+
+        # Query the recording to verify it was added
+        added_recording = session.query(Recording).filter_by(recording_id=1).first()
+        print(f"Added recording: {added_recording.recording_date}, {added_recording.duration}")
+
+        # Query the subject to verify it was added
+        added_subject = session.query(Subject).filter_by(subject_id=1).first()
+        print(f"Added subject: {added_subject.name}")
+
+        # Query the session to verify it was added
+        added_session = session.query(Session).filter_by(session_id=1).first()
+        print(f"Added session: {added_session.session_date}, Recording ID: {added_session.recording_id}, Subject ID: {added_session.subject_id}")
