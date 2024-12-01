@@ -2,6 +2,7 @@ from sqlalchemy import (
     ForeignKey,
     create_engine,
     PrimaryKeyConstraint, 
+    ForeignKeyConstraint
 )
 from sqlalchemy.sql.sqltypes import LargeBinary, Time, Uuid, String, Float, Boolean, Integer, DateTime, Date, Interval, Numeric, Enum
 from datetime import datetime, date, timedelta, time
@@ -68,25 +69,36 @@ class DataBluntMetaClass(DeclarativeMeta):
         if not dct.get("__abstract__", False):
             dct["__tablename__"] =  name.lower()
 
-        # Store all composite primary key columns
-        composite_pk_columns = []
         # If parents are specified, process them
         if parents:
             for parent in parents:
+                # Store all composite foreign key columns
+                composite_fk_columns = []
                 parent_pk_columns = inspect(parent).primary_key
                 for pk in parent_pk_columns:
                     # Add foreign key columns to the child class
                     fk_column = mapped_column(
                         pk.name,
                         pk.type,
-                        ForeignKey(f"{parent.__tablename__}.{pk.name}"),
+                        primary_key=True,
                     )
                     dct[pk.name] = fk_column
-                    composite_pk_columns.append(pk.name)
+                    composite_fk_columns.append(pk.name)
 
-                # TODO: Add relationships to the child class
-                # relationship_name = parent.__name__.lower()
-                # dct[relationship_name] = relationship(parent)
+                if "__table_args__" not in dct:
+                    dct["__table_args__"] = ()
+                table_args = list(dct["__table_args__"])
+                table_args.append(
+                    ForeignKeyConstraint(
+                        composite_fk_columns,
+                        [f"{parent.__name__.lower()}.{column}" for column in composite_fk_columns],
+                        ondelete="RESTRICT",
+                        onupdate="CASCADE"
+                    )
+                )
+                dct["__table_args__"] = tuple(table_args)
+
+                # TODO: See if it makes sense to add some relationships to the child class
 
         # Go through attribute annotations of the class and add
         # corresponding database mapped columns to the class
@@ -94,8 +106,8 @@ class DataBluntMetaClass(DeclarativeMeta):
             column_kwargs = {}
             attr_type_args = list(get_args(attr_type))
             if get_origin(attr_type) is Primary:
+                column_kwargs["primary_key"] = True
                 attr_type = attr_type_args[0]
-                composite_pk_columns.append(attr_name)
             if NoneType in attr_type_args:
                 column_kwargs["nullable"] = True
                 attr_type_args.remove(NoneType)
@@ -103,12 +115,6 @@ class DataBluntMetaClass(DeclarativeMeta):
 
             column = mapped_column(attr_name, convert_python_type(attr_type), **column_kwargs)
             dct[attr_name] = column
-
-        # Define composite primary key constraint
-        if composite_pk_columns:
-            dct["__table_args__"] = (
-                PrimaryKeyConstraint(*composite_pk_columns),
-            )
 
         # Remove all the type annotations from the class attributes
         dct.pop("__annotations__", None)
@@ -129,6 +135,8 @@ class Manual(DataBluntTable):
 class Computed(DataBluntTable):
     __abstract__ = True
 
+
+## TESTING
 
 class Video(Manual):
     video_id: Primary[int]
