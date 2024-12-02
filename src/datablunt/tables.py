@@ -129,6 +129,11 @@ class DataBluntTable(metaclass=DataBluntMetaClass):
     metadata = mapper_registry.metadata
     __init__ = mapper_registry.constructor
 
+    @classmethod
+    def valid_keys(cls, keys):
+        valid_columns = {column.key for column in inspect(cls).mapper.column_attrs}
+        return {key: value for key, value in keys.items() if key in valid_columns}
+
 engine = create_engine("sqlite:////home/arashsm79/playground/datablunt/datablunltdb.sql", enable_from_linting=False)
 DataBluntTable.metadata.create_all(engine)
 session = sqlalchemy.orm.Session(engine)
@@ -186,8 +191,10 @@ class Session(Computed, parents = [Recording, Subject]):
     session_date: str
 
     def make(cls, key):
-        print(key)
-        session.add(Session(session_id=100*key['recording_id'], session_date="2023-10-01", **key))
+        sub: Subject = session.query(Subject).filter_by(**Subject.valid_keys(key)).one()
+        rec: Recording = session.query(Recording).filter_by(**Recording.valid_keys(key)).one()
+        print(sub, rec)
+        session.add(Session(**key, session_id=100*rec.recording_id, session_date="2023-10-01"))
 
 
 class Pose(Computed, parents = [Session]):
